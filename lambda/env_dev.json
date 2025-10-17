@@ -1,0 +1,9 @@
+{
+  "Variables": {
+    "s3_bucket_name": "rss-distributor-bucket",
+    "config_file_name": "config_dev/config.json",
+    "mail_body_template_file_name": "config_dev/mail_body_template_file.html",
+    "feed_sources_file_name": "config_dev/feed_sources.json",
+    "log_level": "DEBUG"
+  }
+}

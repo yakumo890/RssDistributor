@@ -1,0 +1,15 @@
+[project]
+name = "rss-distributor"
+version = "0.1.0"
+description = ""
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.12",
+    "openai>=2.2.0",
+    "requests>=2.32.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]

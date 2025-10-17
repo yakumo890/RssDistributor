@@ -1,0 +1,49 @@
+{
+  "aws": {
+    "secrets_manager": {
+      "secret_id": "rss_distributor_secret",
+      "region": "ap-northeast-1",
+      "OpenAI_api_key": "OpenAI_api_key",
+      "Notion_api_token_key": "Notion_api_token",
+      "source_email_address_key": "source_email_address",
+      "destination_email_address_key": "destination_email_address"
+    },
+    "dynamodb": {
+      "region": "ap-northeast-1",
+      "articles_table_name": "rss_distributor_article",
+      "terms_table_name": "rss_distributor_term",
+      "article_attr": "source_url",
+      "term_attr": "term",
+      "created_at_attr": "created_at",
+      "original_attr": "original_term",
+      "article_url_attr": "article_url"
+    },
+    "ses": {
+      "region": "ap-northeast-1",
+      "subject_template": "技術記事一覧 {date:%Y年%m月%d日}号"
+    },
+    "cloudwatch": {
+      "region": "ap-northeast-1",
+      "log_group_name": "/aws/lambda/RssDistributorLogGroup"
+    }
+  },
+  "processing": {
+    "model": "gpt-4o-mini",
+    "per_feed_limit": 5,
+    "chunk_size": 3500,
+    "temperature": 0.2,
+    "collection_timezone": "Asia/Tokyo",
+    "delay_seconds": 0.0,
+    "collection_days": 1,
+    "feed_max_workers": 2,
+    "chatgpt_max_workers": 3,
+    "notion_max_workers": 2
+  },
+  "notion": {
+    "database_id": "2884c94d-7b96-8044-9172-dfd4b3c74584",
+    "term_property": "Term",
+    "description_property": "Description",
+    "api_version": "2025-09-03",
+    "batch_size": 50
+  }
+}
