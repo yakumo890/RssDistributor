@@ -1,4 +1,4 @@
-> **このREADMEは生成AI（ChatGPT）によって作成されています。**
+※ このREADMEは生成AI（ChatGPT）によって作成されています。
 
 # RSS Distributor
 
@@ -81,7 +81,3 @@ cdk deploy
 - Notionへの登録は常に実行されます。Notionデータベースのスキーマ（`Term` カラム等）を仕様書に合わせて整備してください。
 - S3およびSecrets Managerの内容を更新することで、コードを変更せずに運用パラメータを調整できます。
 - CloudWatch Logsには所定フォーマットでログが出力されるため、監視・トラブルシューティングに活用してください。
-
-## ライセンス
-
-MIT License（`LICENSE` ファイル参照）
