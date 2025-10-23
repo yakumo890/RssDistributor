@@ -7,9 +7,9 @@ RSS Distributor は、複数のRSS/Atomフィードから技術記事を自動�
 ## 主な機能
 
 - **フィード収集**: `feed_sources.json` に定義された複数メディア（RSS/Atom）を順次取得し、対象日の記事のみを抽出します。
-- **要約・用語抽出**: OpenAI Chat Completions API を利用し、記事本文から要約と技術用語を生成します。
+- **用語抽出**: OpenAI Chat Completions API を利用し、記事本文から技術用語を抽出します。
 - **重複排除**: 収集済みの記事URL・技術用語を DynamoDB に保存し、再処理を回避します。
-- **Notion登録**: 技術用語をNotionデータベースへ自動登録します（常に実行）。
+- **Notion登録（バッチ）**: 未説明の技術用語を定期バッチで説明生成し、Notionデータベースへ登録します。
 - **メール配信**: S3上のHTMLテンプレートを用いて記事一覧メールを作成し、SESで送信します。
 - **ログ出力**: CloudWatch Logsに成功ログ（記事一覧・技術用語一覧）およびエラーログを記録します。
 
@@ -21,8 +21,11 @@ RSS Distributor は、複数のRSS/Atomフィードから技術記事を自動�
 ├── deploy.bash                    # デプロイ補助スクリプト
 ├── lambda/
 │   ├── config/                    # 本番想定の設定ファイル（S3アップロード用）
-│   ├── config_dev/                # 開発・検証用の設定ファイル
-│   └── src/                       # Lambdaで実行されるPythonコード
+│   ├── config/{dev,prod}/         # 環境別の設定ファイル
+│   ├── main/                      # 記事収集Lambda（本体）
+│   │   └── src/                   # メイン処理のPythonコード
+│   └── batch/                     # 用語説明生成Lambda
+│       └── src/                   # バッチ処理のPythonコード
 ├── rss_distributor/
 │   └── rss_distributor_stack.py   # CDKスタック定義
 ├── specifications.md              # 仕様書と設定ファイルの詳細
@@ -50,7 +53,7 @@ cdk bootstrap aws://<ACCOUNT_ID>/<REGION>
 ## 設定
 
 1. `specifications.md` に従って S3 に以下のファイルを配置します。
-   - `env.json`（Lambda環境変数の元データ）
+   - `env.json` / `env_dev.json`（Lambda環境変数の元データ）
    - `config.json`、`feed_sources.json`、`mail_body_template_file.html`
 2. Secrets Manager に以下を格納したシークレットを用意します。
    - OpenAI API キー
@@ -73,11 +76,12 @@ cdk deploy
 
 ## ローカル検証
 
-- Lambdaコードの単体テスト: `cd lambda` ディレクトリなどで `pytest` を実行。
-- SecretsやS3へのアクセスが必要な処理をローカル実行する場合は、AWS CLIの資格情報と環境変数を設定した上で `python -m src.summarize_zenn` を実行してください。
+- メイン処理: `cd lambda/main` で `uv run pytest`
+- バッチ処理: `cd lambda/batch` で必要に応じてテストを追加実行
+- SecretsやS3へのアクセスが必要な処理をローカル実行する場合は、AWS CLIの資格情報と環境変数を設定した上で `python -m src.summarize_zenn` などを実行してください。
 
 ## 運用上の注意
 
-- Notionへの登録は常に実行されます。Notionデータベースのスキーマ（`Term` カラム等）を仕様書に合わせて整備してください。
+- Notionへの登録はバッチLambdaで実行されます。Notionデータベースのスキーマ（`Term` カラム等）を仕様書に合わせて整備してください。
 - S3およびSecrets Managerの内容を更新することで、コードを変更せずに運用パラメータを調整できます。
 - CloudWatch Logsには所定フォーマットでログが出力されるため、監視・トラブルシューティングに活用してください。
