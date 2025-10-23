@@ -22,7 +22,6 @@ from .infrastructure import (
     CloudWatchLogger,
     DynamoDBArticleRepository,
     DynamoDBTermRepository,
-    NotionDatabaseClient,
     RSSClient,
     S3FileLoader,
     SESClient,
@@ -60,15 +59,18 @@ def _load_settings_from_s3(env: EnvConfig, s3_loader: S3FileLoader) -> AppSettin
 
 
 def _load_feed_sources(env: EnvConfig, s3_loader: S3FileLoader) -> List[FeedSource]:
-    feed_text = s3_loader.read_text(env.bucket_name, env.feed_sources_file_name)
+    feed_text = s3_loader.read_text(
+        env.bucket_name, env.feed_sources_file_name)
     feed_payload = json.loads(feed_text)
     articles = feed_payload.get("articles", [])
     feed_sources: List[FeedSource] = []
     for item in articles:
         try:
-            feed_sources.append(FeedSource(url=item["url"], media_name=item["media_name"]))
+            feed_sources.append(FeedSource(
+                url=item["url"], media_name=item["media_name"]))
         except KeyError as exc:
-            raise ValueError(f"feed_sources.json のレコードに必要なキーが不足しています: {exc}") from exc
+            raise ValueError(
+                f"feed_sources.json のレコードに必要なキーが不足しています: {exc}") from exc
     return feed_sources
 
 
@@ -125,13 +127,16 @@ def _log_success(logger: Optional[CloudWatchLogger], result: ProcessResult, coll
     if not logger:
         return
     date_str = collection_date.isoformat()
-    article_lines = [f"{item['title']} ({item['url']})" for item in result.article_summaries]
+    article_lines = [
+        f"{item['title']} ({item['url']})" for item in result.article_summaries]
     if not article_lines:
         article_lines = ["(none)"]
-    logger.info("[INFO][{0}] 収集した記事一覧\n".format(date_str) + "\n".join(article_lines))
+    logger.info("[INFO][{0}] 収集した記事一覧\n".format(
+        date_str) + "\n".join(article_lines))
 
     term_lines = result.unique_terms if result.unique_terms else ["(none)"]
-    logger.info("[INFO][{0}] 収集した技術用語一覧\n".format(date_str) + "\n".join(term_lines))
+    logger.info("[INFO][{0}] 収集した技術用語一覧\n".format(
+        date_str) + "\n".join(term_lines))
 
 
 def _log_failure(logger: Optional[CloudWatchLogger], collection_date: datetime.date, reason: str) -> None:
@@ -147,22 +152,7 @@ def _create_openai_client(api_key: Optional[str]) -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-def _prepare_notion_client(settings: AppSettings, notion_token: Optional[str]) -> NotionDatabaseClient:
-    if not settings.notion:
-        raise RuntimeError("configにNotion設定が存在しません。")
-    if not notion_token:
-        raise RuntimeError("Secrets ManagerからNotion APIトークンを取得できませんでした。")
-    settings.notion.api_token = notion_token
-    return NotionDatabaseClient(
-        api_token=notion_token,
-        database_id=settings.notion.database_id,
-        term_property=settings.notion.term_property,
-        description_property=settings.notion.description_property,
-        api_version=settings.notion.api_version,
-    )
-
-
-def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
+def execute() -> Dict[str, Any]:
     env_config = _get_env_config()
     s3_loader = S3FileLoader(region=os.environ.get("AWS_REGION"))
     settings = _load_settings_from_s3(env_config, s3_loader)
@@ -207,6 +197,8 @@ def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
         created_at_attr=dynamodb_cfg.created_at_attr,
         original_attr=dynamodb_cfg.original_attr,
         article_url_attr=dynamodb_cfg.article_url_attr,
+        updated_at_attr=dynamodb_cfg.updated_at_attr,
+        is_described_attr=dynamodb_cfg.is_described_attr,
     )
 
     feed_sources = _load_feed_sources(env_config, s3_loader)
@@ -225,13 +217,9 @@ def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
 
     mail_template = _load_mail_template(env_config, s3_loader)
 
-    notion_client = _prepare_notion_client(
-        settings,
-        secret_values.get(settings.secrets_manager.notion_api_token_key) if settings.secrets_manager else None,
-    )
-
     source_email = secret_values.get(settings.secrets_manager.source_email_key)
-    destination_email = secret_values.get(settings.secrets_manager.destination_email_key)
+    destination_email = secret_values.get(
+        settings.secrets_manager.destination_email_key)
     if not source_email or not destination_email:
         raise RuntimeError("送信元/送信先メールアドレスがSecrets Managerに存在しません。")
 
@@ -269,11 +257,6 @@ def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
     if cloudwatch_logger:
         cloudwatch_logger.debug(f"[SES] 送信メール本文:\n{body_html}")
 
-    def chunk_list(seq: Sequence[Tuple[str, str]], size: int) -> List[Sequence[Tuple[str, str]]]:
-        if size <= 0:
-            size = 50
-        return [seq[i : i + size] for i in range(0, len(seq), size)]
-
     def store_articles() -> None:
         if not result.article_records:
             return
@@ -293,26 +276,9 @@ def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
                 f"[DynamoDB] 技術用語 {len(result.term_store_payload)} 件登録完了"
             )
 
-    def send_to_notion() -> None:
-        if not result.notion_items:
-            return
-        batch_size = settings.notion.batch_size if settings.notion else 50
-        batches = chunk_list(result.notion_items, batch_size)
-        with ThreadPoolExecutor(max_workers=max(1, processing.notion_max_workers)) as notion_executor:
-            future_to_index = {
-                notion_executor.submit(notion_client.create_term_pages, batch): idx
-                for idx, batch in enumerate(batches)
-            }
-            for future in as_completed(future_to_index):
-                idx = future_to_index[future]
-                response = future.result()
-                if cloudwatch_logger:
-                    cloudwatch_logger.debug(
-                        f"[Notion] バッチ{idx + 1}/{len(batches)} レスポンス: {response}"
-                    )
-
     def send_email() -> None:
-        ses_client.send_email_html(source_email, destination_email, subject, body_html)
+        ses_client.send_email_html(
+            source_email, destination_email, subject, body_html)
         if cloudwatch_logger:
             cloudwatch_logger.debug(f"[SES] メール送信完了: {destination_email}")
 
@@ -323,8 +289,6 @@ def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
                 futures.append(executor.submit(store_articles))
             if result.term_store_payload:
                 futures.append(executor.submit(store_terms))
-            if result.notion_items:
-                futures.append(executor.submit(send_to_notion))
             futures.append(executor.submit(send_email))
             for future in futures:
                 future.result()
@@ -337,9 +301,9 @@ def execute(push_to_notion_override: Optional[bool] = None) -> Dict[str, Any]:
     return result.payload
 
 
-def run_cli(push_to_notion_override: Optional[bool]) -> int:
+def run_cli() -> int:
     try:
-        payload = execute(push_to_notion_override)
+        payload = execute()
     except Exception as exc:
         print(f"エラー: {exc}", file=sys.stderr)
         return 1
@@ -348,8 +312,8 @@ def run_cli(push_to_notion_override: Optional[bool]) -> int:
 
 
 def main() -> int:
-    args = parse_args()
-    return run_cli(args.push_to_notion)
+    parse_args()
+    return run_cli()
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI 実行時のみ

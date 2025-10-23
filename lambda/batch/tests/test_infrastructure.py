@@ -1,3 +1,5 @@
+from src.infrastructure import NotionDatabaseClient
+import pytest
 import json
 import random
 import sys
@@ -7,10 +9,6 @@ from typing import List, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-import pytest
-
-from src.infrastructure import NotionDatabaseClient
 
 
 class DummyResponse:
@@ -56,7 +54,8 @@ def test_create_term_pages(monkeypatch, sample_terms):
     def dummy_session_factory():
         return dummy_session
 
-    monkeypatch.setattr("src.infrastructure.requests.Session", dummy_session_factory)
+    monkeypatch.setattr(
+        "src.infrastructure.requests.Session", dummy_session_factory)
 
     client = NotionDatabaseClient(
         api_token="secret_dummy",

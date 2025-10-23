@@ -1,7 +1,7 @@
 {
   "aws": {
     "secrets_manager": {
-      "secret_id": "rss_distributor_secret",
+      "secret_id": "rss_distributor_secrets",
       "region": "ap-northeast-1",
       "OpenAI_api_key": "OpenAI_api_key",
       "Notion_api_token_key": "Notion_api_token",
@@ -10,13 +10,15 @@
     },
     "dynamodb": {
       "region": "ap-northeast-1",
-      "articles_table_name": "rss_distributor_article",
-      "terms_table_name": "rss_distributor_term",
+      "articles_table_name": "rss_distributor_article_dev",
+      "terms_table_name": "rss_distributor_term_dev",
       "article_attr": "source_url",
       "term_attr": "term",
-      "created_at_attr": "created_at",
       "original_attr": "original_term",
-      "article_url_attr": "article_url"
+      "article_url_attr": "article_url",
+      "is_described_attr": "is_described",
+      "created_at_attr": "created_at",
+      "updated_at_attr": "updated_at"
     },
     "ses": {
       "region": "ap-northeast-1",
@@ -24,26 +26,29 @@
     },
     "cloudwatch": {
       "region": "ap-northeast-1",
-      "log_group_name": "/aws/lambda/RssDistributorLogGroup"
+      "log_group_name": "/aws/lambda/RssDistributorLogGroupDev"
     }
   },
   "processing": {
     "model": "gpt-4o-mini",
-    "per_feed_limit": 5,
+    "per_feed_limit": 10,
     "chunk_size": 3500,
     "temperature": 0.2,
     "collection_timezone": "Asia/Tokyo",
     "delay_seconds": 0.0,
-    "collection_days": 1,
-    "feed_max_workers": 2,
-    "chatgpt_max_workers": 3,
-    "notion_max_workers": 2
+    "collection_days": 2,
+    "notion_batch_size": 50,
+    "description_batch_size": 20,
+    "description_fetch_limit": 200,
+    "feed_max_workers": 4,
+    "chatgpt_max_workers": 4,
+    "notion_max_workers": 2,
+    "notion_timeout_seconds": 30.0
   },
   "notion": {
-    "database_id": "2884c94d-7b96-8044-9172-dfd4b3c74584",
+    "database_id": "28e4c94d-7b96-8073-980b-d5b75dd667de",
     "term_property": "Term",
     "description_property": "Description",
-    "api_version": "2025-09-03",
-    "batch_size": 50
+    "api_version": "2025-09-03"
   }
 }

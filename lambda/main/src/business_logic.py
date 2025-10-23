@@ -70,7 +70,8 @@ def _struct_time_to_datetime(struct_time) -> Optional[datetime]:
 
 def parse_entry_published(entry) -> Optional[datetime]:
     """RSSエントリから公開日時を抽出する。"""
-    iso_keys = ("published", "updated", "dc_date", "dc:date", "date", "issued", "created")
+    iso_keys = ("published", "updated", "dc_date",
+                "dc:date", "date", "issued", "created")
     for key in iso_keys:
         value = entry.get(key)
         if value:
@@ -186,48 +187,6 @@ def parse_terms_list(response_text: str) -> List[str]:
         term = str(item).strip()
         if term:
             normalized.append(term)
-    return normalized
-
-
-def parse_term_descriptions(response_text: str) -> List[Dict[str, object]]:
-    """用語説明応答を正規化してリスト化する。"""
-    try:
-        payload = json.loads(response_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"JSONの解析に失敗しました: {exc}") from exc
-
-    raw_terms = payload.get("terms", [])
-    if not isinstance(raw_terms, list):
-        raise ValueError("JSON中のtermsフィールドが配列ではありません。")
-
-    normalized: List[Dict[str, object]] = []
-    for item in raw_terms:
-        if not isinstance(item, dict):
-            continue
-        term = str(item.get("term", "")).strip()
-        if not term:
-            continue
-        description = str(
-            item.get("discription") or item.get("description") or ""
-        ).strip()
-        if len(description) > 100:
-            description = description[:100].rstrip()
-
-        references = item.get("References") or item.get("references") or []
-        if isinstance(references, list):
-            refs = [str(ref).strip() for ref in references if str(ref).strip()]
-        elif references:
-            refs = [str(references).strip()]
-        else:
-            refs = []
-
-        normalized.append(
-            {
-                "term": term,
-                "discription": description,
-                "References": refs,
-            }
-        )
     return normalized
 
 

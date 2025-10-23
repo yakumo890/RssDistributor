@@ -7,7 +7,6 @@ import json
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-import feedparser
 import requests
 from openai import OpenAI
 
@@ -17,13 +16,6 @@ try:
 except ImportError:  # pragma: no cover - boto3はAWS利用時にのみ必要
     boto3 = None
     ClientError = None
-
-
-class RSSClient:
-    """RSSフィード取得クライアント。"""
-
-    def fetch(self, feed_url: str):
-        return feedparser.parse(feed_url)
 
 
 class ChatCompletionClient:
@@ -149,7 +141,8 @@ class SecretsManagerClient:
             return response["SecretString"]
         secret_binary = response.get("SecretBinary")
         if secret_binary is None:
-            raise RuntimeError("Secrets ManagerレスポンスにSecretString/Binaryが含まれていません。")
+            raise RuntimeError(
+                "Secrets ManagerレスポンスにSecretString/Binaryが含まれていません。")
         return base64.b64decode(secret_binary).decode("utf-8")
 
     def get_secret_dict(self, secret_id: str) -> Dict[str, str]:
@@ -157,7 +150,8 @@ class SecretsManagerClient:
         try:
             payload = json.loads(secret_string)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Secrets ManagerのシークレットをJSONとして解析できません: {exc}") from exc
+            raise ValueError(
+                f"Secrets ManagerのシークレットをJSONとして解析できません: {exc}") from exc
         if not isinstance(payload, dict):
             raise ValueError("Secrets ManagerのシークレットはJSONオブジェクトである必要があります。")
         return {str(key): str(value) for key, value in payload.items()}
@@ -167,43 +161,6 @@ class SecretsManagerClient:
         if field not in payload:
             raise KeyError(f"Secrets Managerシークレットに'{field}'が存在しません。")
         return payload[field]
-
-
-class DynamoDBArticleRepository:
-    """記事URLの重複を管理するDynamoDBリポジトリ。"""
-
-    def __init__(
-        self,
-        *,
-        region: str,
-        table_name: str,
-        key_attr: str,
-        created_at_attr: str,
-        client=None,
-    ):
-        _require_boto3()
-        self._client = client or boto3.client("dynamodb", region_name=region)
-        self._table = table_name
-        self._key_attr = key_attr
-        self._created_at_attr = created_at_attr
-
-    def is_processed(self, url: str) -> bool:
-        response = self._client.get_item(
-            TableName=self._table,
-            Key={self._key_attr: {"S": url}},
-            ProjectionExpression=self._key_attr,
-        )
-        return "Item" in response
-
-    def mark_processed(self, url: str, created_at_iso: str) -> None:
-        self._client.put_item(
-            TableName=self._table,
-            Item={
-                self._key_attr: {"S": url},
-                self._created_at_attr: {"S": created_at_iso},
-            },
-            ConditionExpression=f"attribute_not_exists({self._key_attr})",
-        )
 
 
 class DynamoDBTermRepository:
@@ -218,6 +175,8 @@ class DynamoDBTermRepository:
         created_at_attr: str,
         original_attr: str,
         article_url_attr: str,
+        updated_at_attr: str,
+        is_described_attr: str,
         client=None,
     ):
         _require_boto3()
@@ -227,6 +186,8 @@ class DynamoDBTermRepository:
         self._created_at_attr = created_at_attr
         self._original_attr = original_attr
         self._article_url_attr = article_url_attr
+        self._updated_at_attr = updated_at_attr
+        self._is_described_attr = is_described_attr
 
     def get_existing_keys(self, normalized_terms: Sequence[str]) -> set[str]:
         if not normalized_terms:
@@ -248,7 +209,8 @@ class DynamoDBTermRepository:
 
             unprocessed = response.get("UnprocessedKeys", {})
             while unprocessed:
-                response = self._client.batch_get_item(RequestItems=unprocessed)
+                response = self._client.batch_get_item(
+                    RequestItems=unprocessed)
                 for item in response.get("Responses", {}).get(self._table, []):
                     existing.add(item[self._key_attr]["S"])
                 unprocessed = response.get("UnprocessedKeys", {})
@@ -270,6 +232,8 @@ class DynamoDBTermRepository:
                             self._original_attr: {"S": original},
                             self._article_url_attr: {"S": article_url},
                             self._created_at_attr: {"S": created_at_iso},
+                            self._updated_at_attr: {"S": created_at_iso},
+                            self._is_described_attr: {"BOOL": False},
                         }
                     }
                 }
@@ -289,10 +253,61 @@ class DynamoDBTermRepository:
             response = self._client.batch_write_item(RequestItems=unprocessed)
             unprocessed = response.get("UnprocessedItems", {})
 
+    def fetch_terms_for_description(self, limit: int) -> List[Dict[str, str]]:
+        if limit <= 0:
+            return []
+        collected: List[Dict[str, str]] = []
+        exclusive_start_key = None
+        projection = [self._key_attr,
+                      self._original_attr, self._article_url_attr]
+        projection_expr = ",".join(
+            f"#{idx}" for idx, _ in enumerate(projection))
+        attr_names = {f"#{idx}": name for idx, name in enumerate(projection)}
+
+        while len(collected) < limit:
+            params = {
+                "TableName": self._table,
+                "ProjectionExpression": projection_expr,
+                "ExpressionAttributeNames": attr_names,
+                "FilterExpression": f"attribute_not_exists({self._is_described_attr}) OR {self._is_described_attr} = :false",
+                "ExpressionAttributeValues": {":false": {"BOOL": False}},
+            }
+            if exclusive_start_key:
+                params["ExclusiveStartKey"] = exclusive_start_key
+            response = self._client.scan(**params)
+            for item in response.get("Items", []):
+                collected.append(
+                    {
+                        "key": item[self._key_attr]["S"],
+                        "term": item[self._original_attr]["S"],
+                        "article_url": item[self._article_url_attr]["S"],
+                    }
+                )
+                if len(collected) >= limit:
+                    break
+            exclusive_start_key = response.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+        return collected
+
+    def mark_terms_described(self, keys: Sequence[str], timestamp: str) -> None:
+        for key in keys:
+            self._client.update_item(
+                TableName=self._table,
+                Key={self._key_attr: {"S": key}},
+                UpdateExpression=(
+                    f"SET {self._updated_at_attr} = :updated, {self._is_described_attr} = :true"
+                ),
+                ExpressionAttributeValues={
+                    ":updated": {"S": timestamp},
+                    ":true": {"BOOL": True},
+                },
+            )
+
 
 def _chunk(seq: Sequence[str], size: int) -> Iterable[Sequence[str]]:
     for idx in range(0, len(seq), size):
-        yield seq[idx : idx + size]
+        yield seq[idx: idx + size]
 
 
 class S3FileLoader:
@@ -306,24 +321,6 @@ class S3FileLoader:
         response = self._client.get_object(Bucket=bucket, Key=key)
         body = response["Body"].read()
         return body.decode(encoding)
-
-
-class SESClient:
-    """SESを用いてメール送信を行うクライアント。"""
-
-    def __init__(self, *, region: str):
-        _require_boto3()
-        self._client = boto3.client("ses", region_name=region)
-
-    def send_email_html(self, source: str, destination: str, subject: str, body_html: str) -> None:
-        self._client.send_email(
-            Source=source,
-            Destination={"ToAddresses": [destination]},
-            Message={
-                "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": {"Html": {"Data": body_html, "Charset": "UTF-8"}},
-            },
-        )
 
 
 class CloudWatchLogger:
@@ -398,9 +395,11 @@ class CloudWatchLogger:
         if not self._should_log(level):
             return
         if level == "DEBUG" and self._debug_stream:
-            self._debug_token = self._put_event(self._debug_stream, self._debug_token, message)
+            self._debug_token = self._put_event(
+                self._debug_stream, self._debug_token, message)
         else:
-            self._info_token = self._put_event(self._info_stream, self._info_token, message)
+            self._info_token = self._put_event(
+                self._info_stream, self._info_token, message)
 
     def info(self, message: str) -> None:
         self.log(message, "INFO")

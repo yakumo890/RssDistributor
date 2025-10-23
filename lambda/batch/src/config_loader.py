@@ -17,7 +17,7 @@ class NotionSettings:
     term_property: str = "term"
     description_property: str = "Description"
     api_version: str = "2025-09-03"
-    batch_size: int = 50
+    notion_batch_size: int = 50
 
 
 @dataclass
@@ -45,6 +45,8 @@ class DynamoDBSettings:
     created_at_attr: str
     original_attr: str
     article_url_attr: str
+    updated_at_attr: str
+    is_described_attr: str
 
 
 @dataclass
@@ -56,9 +58,13 @@ class ProcessingSettings:
     collection_timezone: str = "UTC"
     delay_seconds: float = 0.0
     collection_days: int = 1
+    notion_batch_size: int = 50
+    description_batch_size: int = 20
+    description_fetch_limit: int = 200
     feed_max_workers: int = 1
     chatgpt_max_workers: int = 1
     notion_max_workers: int = 1
+    notion_timeout_seconds: float = 10.0
 
 
 @dataclass
@@ -119,9 +125,9 @@ def load_settings_from_dict(raw: Dict[str, Any]) -> AppSettings:
                 api_token=notion_raw.get("api_token", ""),
                 database_id=notion_raw["database_id"],
                 term_property=notion_raw.get("term_property", "Term"),
-                description_property=notion_raw.get("description_property", "Description"),
+                description_property=notion_raw.get(
+                    "description_property", "Description"),
                 api_version=notion_raw.get("api_version", "2025-09-03"),
-                batch_size=int(notion_raw.get("batch_size", 50)),
             )
         except KeyError as exc:
             raise KeyError(f"Notion設定に必要なキーが不足しています: {exc}") from exc
@@ -163,6 +169,8 @@ def load_settings_from_dict(raw: Dict[str, Any]) -> AppSettings:
                 created_at_attr=dynamodb_raw["created_at_attr"],
                 original_attr=dynamodb_raw["original_attr"],
                 article_url_attr=dynamodb_raw["article_url_attr"],
+                updated_at_attr=dynamodb_raw["updated_at_attr"],
+                is_described_attr=dynamodb_raw["is_described_attr"],
             )
         except KeyError as exc:
             raise KeyError(f"DynamoDB設定に必要なキーが不足しています: {exc}") from exc
@@ -176,12 +184,25 @@ def load_settings_from_dict(raw: Dict[str, Any]) -> AppSettings:
                 per_feed_limit=int(processing_raw["per_feed_limit"]),
                 chunk_size=int(processing_raw["chunk_size"]),
                 temperature=float(processing_raw["temperature"]),
-                collection_timezone=processing_raw.get("collection_timezone", "UTC"),
+                collection_timezone=processing_raw.get(
+                    "collection_timezone", "UTC"),
                 delay_seconds=float(processing_raw.get("delay_seconds", 0.0)),
                 collection_days=int(processing_raw.get("collection_days", 1)),
-                feed_max_workers=int(processing_raw.get("feed_max_workers", 1)),
-                chatgpt_max_workers=int(processing_raw.get("chatgpt_max_workers", 1)),
-                notion_max_workers=int(processing_raw.get("notion_max_workers", 1)),
+                notion_batch_size=int(
+                    processing_raw.get("notion_batch_size", 50)),
+                description_batch_size=int(
+                    processing_raw.get("description_batch_size", 20)),
+                description_fetch_limit=int(
+                    processing_raw.get("description_fetch_limit", 200)),
+                feed_max_workers=int(
+                    processing_raw.get("feed_max_workers", 1)),
+                chatgpt_max_workers=int(
+                    processing_raw.get("chatgpt_max_workers", 1)),
+                notion_max_workers=int(
+                    processing_raw.get("notion_max_workers", 1)),
+                notion_timeout_seconds=float(
+                    processing_raw.get("notion_timeout_seconds", 10.0)
+                ),
             )
         except KeyError as exc:
             raise KeyError(f"Processing設定に必要なキーが不足しています: {exc}") from exc

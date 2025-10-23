@@ -14,17 +14,15 @@ from .business_logic import (
     ArticleTerms,
     TermCandidate,
     build_articles_output,
-    build_description_map,
     build_unique_term_index,
     chunk_text,
     extract_entry_text,
     is_entry_on_date,
     normalize_term,
-    parse_term_descriptions,
     parse_terms_list,
 )
 from .json_template import build_payload
-from .prompts import build_term_collection_messages, build_term_description_messages
+from .prompts import build_term_collection_messages
 
 
 @dataclass
@@ -41,7 +39,6 @@ class ProcessResult:
     collected_terms: List[str]
     unique_terms: List[str]
     errors: List[str]
-    notion_items: List[Tuple[str, str]]
     skipped_articles: List[str]
     articles: List[Dict[str, Any]]
     article_summaries: List[Dict[str, str]]
@@ -110,13 +107,12 @@ class ArticleProcessingService:
                 feed = future_to_feed[future]
                 try:
                     (
-                feed_articles,
-                feed_collected_terms,
-                feed_article_meta,
-                feed_skipped,
-                feed_errors,
-                feed_article_records,
-            ) = future.result()
+                        feed_articles,
+                        feed_article_meta,
+                        feed_skipped,
+                        feed_errors,
+                        feed_article_records,
+                    ) = future.result()
                 except Exception as exc:
                     error_msg = f"[{feed.url}] フィード処理中にエラーが発生しました: {exc}"
                     errors.append(error_msg)
@@ -137,7 +133,8 @@ class ArticleProcessingService:
                     all_articles.append(article)
                     collected_article_meta.append(meta)
                     article_records.append(record)
-                    collected_terms_debug.extend([term.original for term in article.candidates])
+                    collected_terms_debug.extend(
+                        [term.original for term in article.candidates])
 
         if not all_articles:
             return ProcessResult(
@@ -145,7 +142,6 @@ class ArticleProcessingService:
                 collected_terms=collected_terms_debug,
                 unique_terms=[],
                 errors=errors,
-                notion_items=[],
                 skipped_articles=skipped_articles,
                 articles=[],
                 article_summaries=collected_article_meta,
@@ -161,9 +157,11 @@ class ArticleProcessingService:
         ) = build_unique_term_index(all_articles)
 
         if self._term_repository and unique_terms_info:
-            normalized_keys = [info["normalized"] for info in unique_terms_info]
+            normalized_keys = [info["normalized"]
+                               for info in unique_terms_info]
             try:
-                existing_keys = self._term_repository.get_existing_keys(normalized_keys)
+                existing_keys = self._term_repository.get_existing_keys(
+                    normalized_keys)
             except Exception as exc:
                 errors.append(f"DynamoDBからターム情報を取得中にエラーが発生しました: {exc}")
                 existing_keys = set()
@@ -172,31 +170,20 @@ class ArticleProcessingService:
                 unique_terms_info = [
                     info for info in unique_terms_info if info["normalized"] not in existing_keys
                 ]
-                unique_terms_debug = [info["term"] for info in unique_terms_info]
+                unique_terms_debug = [info["term"]
+                                      for info in unique_terms_info]
                 articles_term_order = [
                     [key for key in keys if key not in existing_keys] for keys in articles_term_order
                 ]
 
-        descriptions_map: Dict[str, Dict[str, object]] = {}
-        if unique_terms_info:
-            try:
-                description_messages = build_term_description_messages(unique_terms_info)
-                description_response = self._chat_client.complete(
-                    model=model,
-                    messages=description_messages,
-                    temperature=temperature,
-                    response_format={"type": "json_object"},
-                )
-                description_items = parse_term_descriptions(description_response)
-            except Exception as exc:
-                errors.append(f"用語説明生成中にエラーが発生しました: {exc}")
-                description_items = []
-
-            descriptions_map = build_description_map(
-                unique_terms_info,
-                description_items,
-                original_term_lookup,
-            )
+        descriptions_map: Dict[str, Dict[str, object]] = {
+            info["normalized"]: {
+                "term": info["term"],
+                "discription": "",
+                "References": [],
+            }
+            for info in unique_terms_info
+        }
 
         articles_output = build_articles_output(
             all_articles,
@@ -204,26 +191,18 @@ class ArticleProcessingService:
             descriptions_map,
         )
 
-        notion_items: List[Tuple[str, str]] = []
         term_store_payload: List[Tuple[str, str, str, str]] = []
+        jst_now = _current_jst_string()
         for term_info in unique_terms_info:
             key = term_info["normalized"]
-            detail = descriptions_map.get(key)
-            if detail:
-                notion_items.append(
-                    (
-                        detail.get("term", term_info["term"]),
-                        detail.get("discription", ""),
-                    )
+            term_store_payload.append(
+                (
+                    key,
+                    term_info["term"],
+                    term_info["url"],
+                    jst_now,
                 )
-                term_store_payload.append(
-                    (
-                        key,
-                        detail.get("term", term_info["term"]),
-                        term_info["url"],
-                        datetime.now(timezone.utc).isoformat(),
-                    )
-                )
+            )
 
         payload = build_payload(articles_output)
 
@@ -232,7 +211,6 @@ class ArticleProcessingService:
             collected_terms=collected_terms_debug,
             unique_terms=unique_terms_debug,
             errors=errors,
-            notion_items=notion_items,
             skipped_articles=skipped_articles,
             articles=articles_output,
             article_summaries=collected_article_meta,
@@ -253,14 +231,12 @@ class ArticleProcessingService:
         collection_tz: ZoneInfo,
     ) -> Tuple[
         List[ArticleTerms],
-        List[str],
         List[Dict[str, str]],
         List[str],
         List[str],
         List[Tuple[str, str]],
     ]:
         articles: List[ArticleTerms] = []
-        collected_terms: List[str] = []
         article_meta: List[Dict[str, str]] = []
         skipped_articles: List[str] = []
         errors: List[str] = []
@@ -273,14 +249,14 @@ class ArticleProcessingService:
             errors.append(error_msg)
             if self._logger:
                 self._logger.error(error_msg)
-            return articles, collected_terms, article_meta, skipped_articles, errors, articles_to_mark
+            return articles, article_meta, skipped_articles, errors, articles_to_mark
 
         if getattr(parsed, "bozo", False):
             error_msg = f"[{feed.url}] RSSの解析に失敗しました: {parsed.bozo_exception}"
             errors.append(error_msg)
             if self._logger:
                 self._logger.error(error_msg)
-            return articles, collected_terms, article_meta, skipped_articles, errors, articles_to_mark
+            return articles, article_meta, skipped_articles, errors, articles_to_mark
 
         entries = getattr(parsed, "entries", [])
         if self._logger:
@@ -306,7 +282,8 @@ class ArticleProcessingService:
                 continue
 
             body = extract_entry_text(entry)
-            article_terms = ArticleTerms(title=title, url=url, body=body, media=feed.media_name)
+            article_terms = ArticleTerms(
+                title=title, url=url, body=body, media=feed.media_name)
 
             chunks = list(chunk_text(body, chunk_size)) if body else []
             seen_terms_in_article = set()
@@ -333,7 +310,6 @@ class ArticleProcessingService:
                             )
                             future_to_index[future] = chunk_index
 
-                        responses = [None] * total_chunks
                         for future in as_completed(future_to_index):
                             chunk_index = future_to_index[future]
                             try:
@@ -346,7 +322,6 @@ class ArticleProcessingService:
                                 if self._logger:
                                     self._logger.error(error_msg)
                                 continue
-                            responses[chunk_index - 1] = response_text
                             if self._logger:
                                 self._logger.debug(
                                     f"[ChatGPT:{feed.media_name}] {title} チャンク{chunk_index}/{total_chunks} 応答: {response_text}"
@@ -358,9 +333,9 @@ class ArticleProcessingService:
                                     continue
                                 seen_terms_in_article.add(normalized)
                                 article_terms.candidates.append(
-                                    TermCandidate(original=term, normalized=normalized)
+                                    TermCandidate(
+                                        original=term, normalized=normalized)
                                 )
-                                collected_terms.append(term)
                         if self._logger:
                             self._logger.debug(
                                 f"[ChatGPT:{feed.media_name}] {title} 取得用語一覧: {[t.original for t in article_terms.candidates]}"
@@ -373,8 +348,9 @@ class ArticleProcessingService:
                     article_terms.candidates.clear()
 
             articles.append(article_terms)
-            article_meta.append({"title": title, "url": url, "media": feed.media_name})
-            articles_to_mark.append((url, datetime.now(timezone.utc).isoformat()))
+            article_meta.append(
+                {"title": title, "url": url, "media": feed.media_name})
+            articles_to_mark.append((url, _current_jst_string()))
 
             processed_count += 1
             if delay > 0 and processed_count < per_feed_limit:
@@ -382,9 +358,15 @@ class ArticleProcessingService:
 
         return (
             articles,
-            collected_terms,
             article_meta,
             skipped_articles,
             errors,
             articles_to_mark,
         )
+
+
+_JST = ZoneInfo("Asia/Tokyo")
+
+
+def _current_jst_string() -> str:
+    return datetime.now(_JST).strftime("%Y-%m-%d %H:%M:%S")

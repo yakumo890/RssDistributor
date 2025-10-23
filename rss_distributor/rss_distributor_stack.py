@@ -29,10 +29,13 @@ class RssDistributorStack(Stack):
         else:
             resource_ids, resource_names = get_resource_ids_names(False)
 
-        lambda_role = _iam.Role(self, resource_ids.lambda_role_id,
+        lambda_main_role = _iam.Role(self, resource_ids.lambda_main_role_id,
                                 assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
-                                role_name=resource_names.lambda_role_name)
+                                role_name=resource_names.lambda_main_role_name)
 
+        lambda_batch_role = _iam.Role(self, resource_ids.lambda_batch_role_id,
+                                assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
+                                role_name=resource_names.lambda_batch_role_name)
 
         article_table = _dynamodb.Table(self, resource_ids.article_table_id,
                                       table_name=resource_names.article_table_name,
@@ -57,20 +60,24 @@ class RssDistributorStack(Stack):
                      "dynamodb:GetItem",
                      "dynamodb:BatchGetItem"],
                      resources=[article_table.table_arn, term_table.table_arn]
-)
-        lambda_role.add_to_policy(dynamodb_policy)
+        )
+
+        lambda_main_role.add_to_policy(dynamodb_policy)
+        lambda_batch_role.add_to_policy(dynamodb_policy)
 
         bucket_policy = _iam.PolicyStatement(
             actions=["s3:GetObject"],
             resources=[bucket.bucket_arn, f"{bucket.bucket_arn}/*"]
         )
-        lambda_role.add_to_policy(bucket_policy)
+        lambda_main_role.add_to_policy(bucket_policy)
+        lambda_batch_role.add_to_policy(bucket_policy)
 
         secrets_policy = _iam.PolicyStatement(
             actions=["secretsmanager:GetSecretValue"],
             resources=[secrets.secret_arn]
         )
-        lambda_role.add_to_policy(secrets_policy)
+        lambda_main_role.add_to_policy(secrets_policy)
+        lambda_batch_role.add_to_policy(secrets_policy)
 
         log_group = _cloudwatch_log.LogGroup(self, resource_ids.log_group_id,
                                              log_group_name=resource_names.log_group_name,
@@ -81,14 +88,15 @@ class RssDistributorStack(Stack):
             actions=["logs:CreateLogStream", "logs:PutLogEvents"],
             resources=[log_group.log_group_arn, f"{log_group.log_group_arn}:*"]
         )
-        lambda_role.add_to_policy(log_group_policy)
+        lambda_main_role.add_to_policy(log_group_policy)
+        lambda_batch_role.add_to_policy(log_group_policy)
 
         # SESについてはすでに存在するものを利用するので、ポリシーだけアタッチ
         ses_policy  = _iam.PolicyStatement(
             actions=["ses:SendEmail", "ses:SendRawEmail"],
             resources=[f"arn:aws:ses:{self.region}:{self.account}:identity/*"]
         )
-        lambda_role.add_to_policy(ses_policy)
+        lambda_main_role.add_to_policy(ses_policy)
 
         rss_distributor_lambda_layer = _lambda.LayerVersion(self, resource_ids.lambda_layer_id,
                                                             layer_version_name=resource_names.lambda_layer_name,
@@ -96,19 +104,32 @@ class RssDistributorStack(Stack):
                                                             compatible_runtimes=[_lambda.Runtime.PYTHON_3_12]
         )
 
-        rss_distributor_function = _lambda.Function(self, resource_ids.lambda_function_id,
-                                                    function_name=resource_names.lambda_function_name,
+        rss_distributor_function = _lambda.Function(self, resource_ids.lambda_main_function_id,
+                                                    function_name=resource_names.lambda_main_function_name,
                                                     runtime=_lambda.Runtime.PYTHON_3_12,
                                                     handler="lambda_function.lambda_handler",
                                                     timeout=Duration.minutes(15),
-                                                    role=lambda_role,
+                                                    role=lambda_main_role,
                                                     code=_lambda.Code.from_inline("import boto3"),
                                                     log_group=log_group)
         rss_distributor_function.add_layers(rss_distributor_lambda_layer)
 
-        _scheduler.Schedule(self, resource_ids.scheduler_id,
-                            schedule_name=resource_names.scheduler_name,
+        _scheduler.Schedule(self, resource_ids.main_scheduler_id,
+                            schedule_name=resource_names.main_scheduler_name,
                             schedule=_scheduler.ScheduleExpression.cron(minute="0", hour="23", day="*", month="*", year="*", time_zone=TimeZone.ASIA_TOKYO),
                             target=_scheduler_targets.LambdaInvoke(rss_distributor_function))
         
-        
+        batch_function = _lambda.Function(self, resource_ids.lambda_batch_function_id,
+                                         function_name=resource_names.lambda_batch_function_name,
+                                         runtime=_lambda.Runtime.PYTHON_3_12,
+                                         handler="lambda_function.lambda_handler",
+                                         timeout=Duration.minutes(15),
+                                         role=lambda_batch_role,
+                                         code=_lambda.Code.from_inline("import boto3"),
+                                         log_group=log_group)
+        batch_function.add_layers(rss_distributor_lambda_layer)
+
+        _scheduler.Schedule(self, f"{resource_ids.batch_scheduler_id}",
+                            schedule_name=f"{resource_names.batch_scheduler_name}",
+                            schedule=_scheduler.ScheduleExpression.cron(minute="0", hour="0", day="*", month="*", year="*", time_zone=TimeZone.ASIA_TOKYO),
+                            target=_scheduler_targets.LambdaInvoke(batch_function))

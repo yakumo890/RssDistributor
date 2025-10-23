@@ -1,0 +1,16 @@
+{
+  "articles": [
+    {
+      "media_name": "zenn",
+      "url": "https://zenn.dev/topics/typescript/feed"
+    },
+    {
+      "media_name": "zenn",
+      "url": "https://zenn.dev/topics/react/feed"
+    },
+    {
+      "media_name": "zenn",
+      "url": "https://zenn.dev/topics/csharp/feed"
+    }
+  ]
+}
